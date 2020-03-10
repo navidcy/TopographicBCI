@@ -9,7 +9,6 @@
 using
   PyPlot,
   FourierFlows,
-  BenchmarkTools,
   LinearAlgebra
 
 using Statistics: mean
@@ -29,21 +28,21 @@ gr = TwoDGrid(nx, L, ny, L)
 
 nlayers = 2       # these choice of parameters give the
 f0, g = 1, 1      # desired PV-streamfunction relations
- H = [0.2, 0.8]   # q1 = Δψ1 + 25*(ψ2-ψ1), and
-rho = [4.0, 5.0]   # q2 = Δψ2 + 25/4*(ψ1-ψ2).
+H = [0.2, 0.8]   # q1 = Δψ1 + 25*(ψ2-ψ1), and
+ρ = [4.0, 5.0]   # q2 = Δψ2 + 25/4*(ψ1-ψ2).
 
 U = zeros(ny, nlayers)
 U[:, 1] = @. sech(gr.y/0.2)^2
 
 x, y = gridpoints(gr)
 k0, l0 = gr.k[2], gr.l[2] # fundamental wavenumbers
-eta = @. 10*cos(10*k0*x)*cos(10*l0*y)
-dt, stepper = 0.01, "FilteredRK4"
+eta = @. 3cos(10k0*x)*cos(10l0*y)
+dt, stepper = 0.005, "FilteredAB3"
 
-prob = MultilayerQG.Problem(nlayers=nlayers, nx=nx, U=U, Lx=L, f0=f0, g=g, H=H, rho=rho, eta=eta, dt=dt, stepper=stepper)
+prob = MultilayerQG.Problem(nlayers=nlayers, nx=nx, U=U, Lx=L, f0=f0, g=g, H=H, ρ=ρ, eta=eta, dt=dt, stepper=stepper)
 sol, cl, pr, vs, gr = prob.sol, prob.clock, prob.params, prob.vars, prob.grid
 
-prob2 = MultilayerQG.Problem(nlayers=nlayers, nx=nx, U=U, Lx=L, f0=f0, g=g, H=H, rho=rho, eta=eta, linear=true, dt=dt, stepper=stepper)
+prob2 = MultilayerQG.Problem(nlayers=nlayers, nx=nx, U=U, Lx=L, f0=f0, g=g, H=H, ρ=ρ, eta=eta, linear=true, dt=dt, stepper=stepper)
 sol2, cl2, pr2, vs2, gr2 = prob2.sol, prob2.clock, prob2.params, prob2.vars, prob2.grid
 
 
@@ -53,8 +52,8 @@ qi3 = @. 2e-8*cos(2k0*x)*cos(3l0*y)      - 2e-8*cos(4k0*x)*cos(1l0*y)
 
 
 qi = zeros(gr.nx, gr.ny, nlayers)
-qi[:, :, 1] = 0*qi1 + 1e-10*randn(gr.nx, gr.ny)
-qi[:, :, 2] = 0*qi2 + 1e-10*randn(gr.nx, gr.ny)
+qi[:, :, 1] = 0*qi1 + 1e-5*randn(gr.nx, gr.ny)
+qi[:, :, 2] = 0*qi2 + 1e-5*randn(gr.nx, gr.ny)
 # qi[40, 40, 2] = 0.00001
 # qi[:, :, 3] = 0*qi3 + 1e-10*randn(gr.nx, gr.ny)
 
@@ -92,7 +91,7 @@ MultilayerQG.set_q!(prob, q)
 MultilayerQG.set_q!(problin, q)
 ke = MultilayerQG.energies(prob)
 
-fac = 1e-4
+fac = 1e-5
 @. sol *= prob.timestepper.filter
 sol .= fac*sol/maximum(abs.(sol))
 
@@ -102,27 +101,36 @@ sol2 .= fac*sol2/maximum(abs.(sol2))
 E = Diagnostic(energies, prob; nsteps=1)
 diags = [E]
 
-fig, axs = subplots(ncols=2, nrows=nlayers, figsize=(10, 10))
 
 startwalltime = time()
 
-nsubsteps = 250*4
+nsubsteps = 500
 growth = zeros(nsubsteps)
 mom1thick = zeros(nsubsteps)
-for i in 1:nsubsteps
-  println(i)
+ke1ke2 = zeros(nsubsteps)
+growthlin = zeros(nsubsteps)
+mom1thicklin = zeros(nsubsteps)
+ke1ke2lin = zeros(nsubsteps)
+
+error = 1
+i = 1
+
+fig, axs = subplots(ncols=2, nrows=nlayers, figsize=(10, 10), num=1)
+
+while error>1e-5
   MultilayerQG.updatevars!(prob)
-  # MultilayerQG.updatevars!(problin)
+  MultilayerQG.updatevars!(problin)
+  
   # cfl = prob.clock.dt*maximum([maximum(vs.u)/gr.dx, maximum(vs.v)/gr.dy])
   # log = @sprintf("step: %04d, t: %d, cfl: %.2f, τ: %.2f min",
   #   prob.clock.step, prob.clock.t, cfl,
   #   (time()-startwalltime)/60)
   
   for j in 1:nlayers
-
+  
     maxq = maximum(abs.(vs.q[:, :, j]))
     levels = range(-maxq[1], maxq[1], length=50)
-
+  
     sca(axs[j])
     cla()
     contourf(x, y, vs.q[:, :, j], levels=levels)
@@ -131,10 +139,10 @@ for i in 1:nsubsteps
     xlim(-L/2, L/2)
     ylim(-L/2, L/2)
     title("PV, layer "*string(j))
-    
+  
     maxψ = maximum(abs.(vs.psi[:, :, j]))
     levels = range(-maxψ[1], maxψ[1], length=10)
-
+  
     sca(axs[j+nlayers])
     cla()
     contourf(x, y, vs.psi[:, :, j], levels=levels)
@@ -147,39 +155,106 @@ for i in 1:nsubsteps
     title("streamfunction, layer "*string(j))
   end
 
-  pause(0.01)
-
   (ke0, pe0) = MultilayerQG.energies(prob)
   stepforward!(prob, diags, nsubsteps)
   (ke, pe) = MultilayerQG.energies(prob)
   (lateralfluxes, verticalfluxes) = fluxes(prob)
   sol .= fac*sol/maximum(abs.(sol))
-  growth[i] =  log.(ke[1]/ke0[1])/(2*nsubsteps*dt)
-  # growth[i] =  ke[1]
+  growth[i] =  mean(log.(ke[1]/ke0[1])/(2*nsubsteps*dt) + log.(ke[2]/ke0[2])/(2*nsubsteps*dt))
   mom1thick[i] = lateralfluxes[1]/verticalfluxes[1]
-  # stepforward!(problin, nsubsteps)
+  ke1ke2[i] = ke[1]/ke[2]
+  
+  # (ke0lin, pe0lin) = MultilayerQG.energies(problin)
+  # stepforward!(problin, diags, nsubsteps)
+  # (kelin, pelin) = MultilayerQG.energies(problin)
+  # (lateralfluxeslin, verticalfluxeslin) = fluxes(problin)
   # sol2 .= fac*sol2/maximum(abs.(sol2))
+  # growthlin[i] =  mean(log.(kelin[1]/ke0lin[1])/(2*nsubsteps*dt) + log.(kelin[2]/ke0lin[2])/(2*nsubsteps*dt))
+  # mom1thicklin[i] = lateralfluxeslin[1]/verticalfluxeslin[1]
+  # ke1ke2lin[i] = kelin[1]/kelin[2]
 
+  pause(0.001)
+  
   figure(23)
   clf()
+  subplot(311)
   plot(growth[1:i], "*")
-
-  figure(24)
-  clf()
+  # plot(growthlin[1:i], ".r")
+  title(L"growth rate")
+  subplot(312)
   plot(mom1thick[1:i], "o")
+  # plot(mom1thicklin[1:i], ".r")
+  title(L"lateralfluxes_1 / verticalfluxes")
+  subplot(313)
+  plot(ke1ke2[1:i], "s")
+  # plot(ke1ke2lin[1:i], ".r")
+  title(L"ke_1 /  ke_2")
+  if i>1
+    global error = abs(growth[i]-growth[i-1])/abs(growth[i])
+  end
+  println(error)
+  global i += 1
 
 end
+
+growth = growth[1:i-1]
+mom1thick = mom1thick[1:i-1]
+ke1ke2 = ke1ke2[1:i-1]
+growthlin = growthlin[1:i-1]
+mom1thicklin = mom1thicklin[1:i-1]
+ke1ke2lin = ke1ke2lin[1:i-1]
+
+
+
+fig, axs = subplots(ncols=2, nrows=nlayers, figsize=(10, 10), num=1)
 
 for j in 1:nlayers
+
+  maxq = maximum(abs.(vs.q[:, :, j]))
+  levels = range(-maxq[1], maxq[1], length=50)
+
   sca(axs[j])
   cla()
-  pcolormesh(x, y, q[:, :, j])
-  # xlim(-L/2, L/2)
-  # ylim(-L/2, L/2)
+  contourf(x, y, vs.q[:, :, j], levels=levels)
+  # cb = colorbar(axs[j], fraction = 0.05, shrink = 0.5, pad = 0.1)
+  # cb[:set_label](label = "Variable [units]", rotation=270)
+  xlim(-L/2, L/2)
+  ylim(-L/2, L/2)
+  title("PV, layer "*string(j))
+  
+  maxψ = maximum(abs.(vs.psi[:, :, j]))
+  levels = range(-maxψ[1], maxψ[1], length=10)
+
   sca(axs[j+nlayers])
   cla()
-  pcolormesh(x, y, psi[:, :, j])
-  # xlim(-L/2, L/2)
-  # ylim(-L/2, L/2)
-  pause(0.001)
+  contourf(x, y, vs.psi[:, :, j], levels=levels)
+  contour(x, y, vs.psi[:, :, j], levels=levels, colors="k")
+  # pcolormesh(x, y, vs.u[:, :, j])
+  # cb = colorbar(axs[j+nlayers], fraction = 0.05, shrink = 0.5, pad = 0.1)
+  # cb[:set_label](label = "Variable [units]", rotation=270)
+  xlim(-L/2, L/2)
+  ylim(-L/2, L/2)
+  title("streamfunction, layer "*string(j))
 end
+
+
+pause(0.01)
+
+
+figure(23)
+clf()
+subplot(311)
+plot(growth, "*")
+# plot(growthlin, ".r")
+title(L"growth rate")
+
+subplot(312)
+plot(mom1thick, "o")
+# plot(mom1thicklin, ".r")
+title(L"lateralfluxes_1 / verticalfluxes")
+
+
+subplot(313)
+plot(ke1ke2, "s")
+# plot(ke1ke2lin, ".r")
+title(L"ke_1 /  ke_2")
